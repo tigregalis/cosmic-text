@@ -138,15 +138,7 @@ where
             .buffer_mut()
             .shape_until(i32::max_value());
 
-        let mut layout_lines = 0;
-        for line in editor.buffer().lines.iter() {
-            match line.layout_opt() {
-                Some(layout) => layout_lines += layout.len(),
-                None => (),
-            }
-        }
-
-        let height = layout_lines as f32 * editor.buffer().metrics().line_height;
+        let height = editor.buffer().line_heights().iter().sum();
         let size = Size::new(limits.max().width, height);
         log::info!("size {:?}", size);
 
@@ -219,10 +211,10 @@ where
         let mut editor = editor.borrow_with(&mut font_system);
 
         // Scale metrics
-        let metrics = editor.buffer().metrics();
-        editor
-            .buffer_mut()
-            .set_metrics(metrics.scale(SCALE_FACTOR as f32));
+        // let metrics = editor.buffer().metrics();
+        // editor
+        //     .buffer_mut()
+        //     .set_metrics(metrics.scale(SCALE_FACTOR as f32));
 
         // Set size
         editor.buffer_mut().set_size(image_w as f32, image_h as f32);
@@ -246,7 +238,7 @@ where
         );
 
         // Restore original metrics
-        editor.buffer_mut().set_metrics(metrics);
+        // editor.buffer_mut().set_metrics(metrics);
 
         let handle = image::Handle::from_pixels(image_w as u32, image_h as u32, pixels);
         image::Renderer::draw(

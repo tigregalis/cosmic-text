@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use crate::{CacheKey, Color};
 
 /// A laid out glyph
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LayoutGlyph {
     /// Start index of cluster in original line
     pub start: usize,
@@ -54,7 +54,7 @@ pub struct LayoutGlyph {
     pub metadata: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PhysicalGlyph {
     /// Cache key, see [CacheKey]
     pub cache_key: CacheKey,
@@ -84,25 +84,56 @@ impl LayoutGlyph {
 }
 
 /// A line of laid out glyphs
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LayoutLine {
     /// Width of the line
-    pub w: f32,
+    pub width: f32,
     /// Maximum ascent of the glyphs in line
     pub max_ascent: f32,
     /// Maximum descent of the glyphs in line
     pub max_descent: f32,
     /// Glyphs in line
     pub glyphs: Vec<LayoutGlyph>,
+    /// Height of the line, calculated from the glyphs at creation
+    height: f32,
 }
 
 impl LayoutLine {
-    pub fn line_height(&self) -> f32 {
-        self.glyphs
+    /// Creates a new layoutline and  calculates the line height from the largest characters in the line,
+    // if the line has no characters, the height will be zero
+    pub fn new(width: f32, max_ascent: f32, max_descent: f32, glyphs: Vec<LayoutGlyph>) -> Self {
+        // Calculates the line height from the largest characters in the line, if the line has no characters
+        // well the line height is 0
+        let height = glyphs
             .iter()
             .map(|g| g.line_height)
             .reduce(f32::max)
-            .unwrap_or_default()
+            .unwrap_or(0.0);
+        Self {
+            width,
+            max_ascent,
+            max_descent,
+            glyphs,
+            height,
+        }
+    }
+    /// generates an empty layoutline with only a height
+    pub fn empty_with_height(height: f32) -> Self {
+        Self {
+            height,
+            width: 0.,
+            max_ascent: 0.,
+            max_descent: 0.,
+            glyphs: Vec::new(),
+        }
+    }
+
+    pub fn line_height(&self) -> f32 {
+        self.height
+    }
+    /// Calculates the line height from the lines last characters line height
+    pub fn last_char_line_height(&self) -> Option<f32> {
+        self.glyphs.iter().last().map(|g| g.line_height)
     }
 }
 

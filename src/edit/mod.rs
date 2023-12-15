@@ -1,5 +1,6 @@
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
+use core::cmp;
 
 #[cfg(feature = "swash")]
 use crate::Color;
@@ -35,6 +36,8 @@ pub enum Action {
     Down,
     /// Move cursor to start of line
     Home,
+    /// Move cursor to start of line, skipping whitespace
+    SoftHome,
     /// Move cursor to end of line
     End,
     /// Move cursor to start of paragraph
@@ -57,12 +60,24 @@ pub enum Action {
     Backspace,
     /// Delete text in front of cursor
     Delete,
+    // Indent text (typically Tab)
+    Indent,
+    // Unindent text (typically Shift+Tab)
+    Unindent,
     /// Mouse click at specified position
-    Click { x: i32, y: i32 },
+    Click {
+        x: i32,
+        y: i32,
+    },
     /// Mouse drag to specified position
-    Drag { x: i32, y: i32 },
+    Drag {
+        x: i32,
+        y: i32,
+    },
     /// Scroll specified number of lines
-    Scroll { lines: i32 },
+    Scroll {
+        lines: i32,
+    },
     /// Move cursor to previous word boundary
     PreviousWord,
     /// Move cursor to next word boundary
@@ -75,6 +90,57 @@ pub enum Action {
     BufferStart,
     /// Move cursor to the end of the document
     BufferEnd,
+    /// Move cursor to specific line
+    GotoLine(usize),
+}
+
+/// A unique change to an editor
+#[derive(Clone, Debug)]
+pub struct ChangeItem {
+    /// Cursor indicating start of change
+    pub start: Cursor,
+    /// Cursor indicating end of change
+    pub end: Cursor,
+    /// Text to be inserted or deleted
+    pub text: String,
+    /// Insert if true, delete if false
+    pub insert: bool,
+}
+
+impl ChangeItem {
+    // Reverse change item (in place)
+    pub fn reverse(&mut self) {
+        self.insert = !self.insert;
+    }
+}
+
+/// A set of change items grouped into one logical change
+#[derive(Clone, Debug, Default)]
+pub struct Change {
+    /// Change items grouped into one change
+    pub items: Vec<ChangeItem>,
+}
+
+impl Change {
+    // Reverse change (in place)
+    pub fn reverse(&mut self) {
+        self.items.reverse();
+        for item in self.items.iter_mut() {
+            item.reverse();
+        }
+    }
+}
+
+/// Selection mode
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Selection {
+    /// No selection
+    None,
+    /// Normal selection
+    Normal(Cursor),
+    /// Select by lines
+    Line(Cursor),
+    //TODO: Select block
 }
 
 /// A trait to allow easy replacements of [`Editor`], like `SyntaxEditor`
@@ -106,13 +172,59 @@ pub trait Edit {
     fn set_cursor(&mut self, cursor: Cursor);
 
     /// Get the current selection position
-    fn select_opt(&self) -> Option<Cursor>;
+    fn selection(&self) -> Selection;
 
     /// Set the current selection position
-    fn set_select_opt(&mut self, select_opt: Option<Cursor>);
+    fn set_selection(&mut self, selection: Selection);
+
+    /// Get the bounds of the current selection
+    //TODO: will not work with Block select
+    fn selection_bounds(&self) -> Option<(Cursor, Cursor)> {
+        let cursor = self.cursor();
+        match self.selection() {
+            Selection::None => None,
+            Selection::Normal(select) => match select.line.cmp(&cursor.line) {
+                cmp::Ordering::Greater => Some((cursor, select)),
+                cmp::Ordering::Less => Some((select, cursor)),
+                cmp::Ordering::Equal => {
+                    /* select.line == cursor.line */
+                    if select.index < cursor.index {
+                        Some((select, cursor))
+                    } else {
+                        /* select.index >= cursor.index */
+                        Some((cursor, select))
+                    }
+                }
+            },
+            Selection::Line(select) => {
+                let start_line = cmp::min(select.line, cursor.line);
+                let end_line = cmp::max(select.line, cursor.line);
+                let end_index = self.buffer().lines[end_line].text().len();
+                Some((Cursor::new(start_line, 0), Cursor::new(end_line, end_index)))
+            }
+        }
+    }
+
+    /// Get the current automatic indentation setting
+    fn auto_indent(&self) -> bool;
+
+    /// Enable or disable automatic indentation
+    fn set_auto_indent(&mut self, auto_indent: bool);
+
+    /// Get the current tab width
+    fn tab_width(&self) -> u16;
+
+    /// Set the current tab width. A `tab_width` of 0 is not allowed, and will be ignored
+    fn set_tab_width(&mut self, tab_width: u16);
 
     /// Shape lines until scroll, after adjusting scroll if the cursor moved
     fn shape_as_needed(&mut self, font_system: &mut FontSystem);
+
+    /// Delete text starting at start Cursor and ending at end Cursor
+    fn delete_range(&mut self, start: Cursor, end: Cursor);
+
+    /// Insert text at specified cursor with specified attrs_list
+    fn insert_at(&mut self, cursor: Cursor, data: &str, attrs_list: Option<AttrsList>) -> Cursor;
 
     /// Copy selection
     fn copy_selection(&self) -> Option<String>;
@@ -123,7 +235,20 @@ pub trait Edit {
 
     /// Insert a string at the current cursor or replacing the current selection with the given
     /// attributes, or with the previous character's attributes if None is given.
-    fn insert_string(&mut self, data: &str, attrs_list: Option<AttrsList>);
+    fn insert_string(&mut self, data: &str, attrs_list: Option<AttrsList>) {
+        self.delete_selection();
+        let new_cursor = self.insert_at(self.cursor(), data, attrs_list);
+        self.set_cursor(new_cursor);
+    }
+
+    /// Apply a change
+    fn apply_change(&mut self, change: &Change) -> bool;
+
+    /// Start collecting change
+    fn start_change(&mut self);
+
+    /// Get completed change
+    fn finish_change(&mut self) -> Option<Change>;
 
     /// Perform an [Action] on the editor
     fn action(&mut self, font_system: &mut FontSystem, action: Action);
