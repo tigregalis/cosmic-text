@@ -78,6 +78,12 @@ pub trait Fallback: Send + Sync {
     fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str];
 }
 
+impl<T: Fallback + 'static> From<T> for Box<dyn Fallback> {
+    fn from(t: T) -> Self {
+        Box::new(t)
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Fallbacks {
     lists: Vec<&'static str>,

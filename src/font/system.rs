@@ -164,7 +164,7 @@ impl FontSystem {
     pub fn new_with_locale_and_db_and_fallback(
         locale: String,
         db: fontdb::Database,
-        impl_fallback: impl Fallback + 'static,
+        impl_fallback: impl Into<Box<dyn Fallback>>,
     ) -> Self {
         let mut monospace_font_ids = db
             .faces()
@@ -203,7 +203,8 @@ impl FontSystem {
             .map(|(k, v)| (k, Vec::from_iter(v)))
             .collect();
 
-        let fallbacks = Fallbacks::new(&impl_fallback, &[], &locale);
+let dyn_fallback = impl_fallback.into();
+        let fallbacks = Fallbacks::new(dyn_fallback.as_ref(), &[], &locale);
 
         Self {
             locale,
@@ -217,7 +218,7 @@ impl FontSystem {
             #[cfg(feature = "shape-run-cache")]
             shape_run_cache: crate::ShapeRunCache::default(),
             shape_buffer: ShapeBuffer::default(),
-            dyn_fallback: Box::new(impl_fallback),
+            dyn_fallback,
             fallbacks,
         }
     }
@@ -246,6 +247,11 @@ impl FontSystem {
     /// Consume this [`FontSystem`] and return the locale and database.
     pub fn into_locale_and_db(self) -> (String, fontdb::Database) {
         (self.locale, self.db)
+    }
+
+    /// Consume this [`FontSystem`] and return the locale, font database and font fallback list.
+    pub fn into_locale_and_db_and_fallback(self) -> (String, fontdb::Database, Box<dyn Fallback>) {
+        (self.locale, self.db, self.dyn_fallback)
     }
 
     /// Get a font by its ID.
