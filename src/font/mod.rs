@@ -16,7 +16,7 @@ use rustybuzz::Face as RustybuzzFace;
 use self_cell::self_cell;
 
 pub(crate) mod fallback;
-pub use fallback::{Fallback, PlatformFallback};
+pub use fallback::{Fallback, PlatformFallback, Script};
 
 pub use self::system::*;
 mod system;

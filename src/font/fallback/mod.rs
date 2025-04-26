@@ -6,7 +6,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::{mem, ops::Range};
 use fontdb::Family;
-use unicode_script::Script;
+// pub because Script is part of the interface of the Fallback trait
+pub use unicode_script::Script;
 
 use crate::{Font, FontMatchKey, FontSystem, ShapeBuffer};
 
@@ -33,9 +34,10 @@ mod platform;
 /// A default implementation is provided by the [`PlatformFallback`] struct, which encapsulates the target platform's pre-configured fallback lists.
 ///
 /// ```rust
-/// # use unicode_script::Script;
-/// # use cosmic_text::{Fallback, FontSystem};
+/// use cosmic_text::{Fallback, FontSystem, Script};
+///
 /// struct MyFallback;
+///
 /// impl Fallback for MyFallback {
 ///     fn common_fallback(&self) -> &[&'static str] {
 ///         &[
