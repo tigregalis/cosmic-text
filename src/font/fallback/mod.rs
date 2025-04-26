@@ -34,7 +34,7 @@ mod platform;
 /// A default implementation is provided by the [`PlatformFallback`] struct, which encapsulates the target platform's pre-configured fallback lists.
 ///
 /// ```rust
-/// use cosmic_text::{Fallback, FontSystem, Script};
+/// use cosmic_text::{fontdb, Fallback, FontSystem, Script};
 ///
 /// struct MyFallback;
 ///
