@@ -8,7 +8,7 @@ use core::{mem, ops::Range};
 use fontdb::Family;
 use unicode_script::Script;
 
-use crate::{BuildHasher, Font, FontMatchKey, FontSystem, HashMap, ShapeBuffer};
+use crate::{Font, FontMatchKey, FontSystem, ShapeBuffer};
 
 #[cfg(not(any(all(unix, not(target_os = "android")), target_os = "windows")))]
 #[path = "other.rs"]
@@ -79,10 +79,9 @@ pub trait Fallback: Send + Sync {
 #[derive(Debug, Default)]
 pub(crate) struct Fallbacks {
     lists: Vec<&'static str>,
-    common_fallback_range: Range<usize>,
-    forbidden_fallback_range: Range<usize>,
-    // PERF: Consider using NoHashHasher since Script is just an integer
-    script_fallback_ranges: HashMap<Script, Range<usize>>,
+    common_fallback_range_end: usize,
+    forbidden_fallback_range_end: usize,
+    script_fallback_ranges: Vec<Option<Range<usize>>>,
     locale: String,
 }
 
@@ -95,33 +94,33 @@ impl Fallbacks {
         let mut lists =
             Vec::with_capacity(common_fallback.len() + forbidden_fallback.len() + scripts.len());
 
-        let mut index = lists.len();
+        lists.extend_from_slice(common_fallback);
+        let common_fallback_range_end = lists.len();
+
+        lists.extend_from_slice(forbidden_fallback);
+        let forbidden_fallback_range_end = lists.len();
+
+        let mut index = forbidden_fallback_range_end;
         let mut new_range = |lists: &Vec<&str>| {
             let old_index = index;
             index = lists.len();
             old_index..index
         };
 
-        lists.extend_from_slice(common_fallback);
-        let common_fallback_range = new_range(&lists);
-
-        lists.extend_from_slice(forbidden_fallback);
-        let forbidden_fallback_range = new_range(&lists);
-
-        let mut script_fallback_ranges =
-            HashMap::with_capacity_and_hasher(scripts.len(), BuildHasher::default());
+        // unicode_script::Script is repr(u8) and has a maximum of 256 variants
+        let mut script_fallback_ranges = vec![None; 256];
         for &script in scripts {
             let script_fallback = fallbacks.script_fallback(script, locale);
             lists.extend_from_slice(script_fallback);
             let script_fallback_range = new_range(&lists);
-            script_fallback_ranges.insert(script, script_fallback_range);
+            script_fallback_ranges[script as usize] = Some(script_fallback_range);
         }
 
         let locale = locale.to_owned();
         Self {
             lists,
-            common_fallback_range,
-            forbidden_fallback_range,
+            common_fallback_range_end,
+            forbidden_fallback_range_end,
             script_fallback_ranges,
             locale,
         }
@@ -138,27 +137,26 @@ impl Fallbacks {
         };
 
         for &script in scripts {
-            self.script_fallback_ranges
-                .entry(script)
-                .or_insert_with_key(|&script| {
-                    let script_fallback = fallbacks.script_fallback(script, &self.locale);
-                    self.lists.extend_from_slice(script_fallback);
-                    new_range(&self.lists)
-                });
+            let script_fallback = fallbacks.script_fallback(script, &self.locale);
+            self.lists.extend_from_slice(script_fallback);
+            self.script_fallback_ranges[script as usize] = Some(new_range(&self.lists));
         }
     }
 
     pub(crate) fn common_fallback(&self) -> &[&'static str] {
-        &self.lists[self.common_fallback_range.clone()]
+        debug_assert!(self.common_fallback_range_end <= self.forbidden_fallback_range_end);
+        &self.lists[0..self.common_fallback_range_end]
     }
 
     pub(crate) fn forbidden_fallback(&self) -> &[&'static str] {
-        &self.lists[self.forbidden_fallback_range.clone()]
+        debug_assert!(self.common_fallback_range_end <= self.forbidden_fallback_range_end);
+        &self.lists[self.common_fallback_range_end..self.forbidden_fallback_range_end]
     }
 
     pub(crate) fn script_fallback(&self, script: Script) -> &[&'static str] {
         self.script_fallback_ranges
-            .get(&script)
+            .get(script as usize)
+            .and_then(|x| x.as_ref())
             .map_or(&[], |range| &self.lists[range.clone()])
     }
 }
