@@ -1,5 +1,4 @@
 use crate::{Attrs, Font, FontMatchAttrs, HashMap, ShapeBuffer};
-use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -114,9 +113,6 @@ pub struct FontSystem {
     #[cfg(feature = "shape-run-cache")]
     pub shape_run_cache: crate::ShapeRunCache,
 
-    /// [`Fallback`] trait object for computing font fallback lists.
-    pub(crate) dyn_fallback: Box<dyn Fallback>,
-
     /// Computed font fallback lists.
     pub(crate) fallbacks: Fallbacks,
 }
@@ -174,7 +170,7 @@ impl FontSystem {
     pub fn new_with_locale_and_db_and_fallback(
         locale: String,
         db: fontdb::Database,
-        impl_fallback: impl Into<Box<dyn Fallback>>,
+        fallback: impl Fallback,
     ) -> Self {
         let mut monospace_font_ids = db
             .faces()
@@ -213,8 +209,7 @@ impl FontSystem {
             .map(|(k, v)| (k, Vec::from_iter(v)))
             .collect();
 
-        let dyn_fallback = impl_fallback.into();
-        let fallbacks = Fallbacks::new(dyn_fallback.as_ref(), &[], &locale);
+        let fallbacks = Fallbacks::new(fallback, &locale);
 
         Self {
             locale,
@@ -228,7 +223,6 @@ impl FontSystem {
             #[cfg(feature = "shape-run-cache")]
             shape_run_cache: crate::ShapeRunCache::default(),
             shape_buffer: ShapeBuffer::default(),
-            dyn_fallback,
             fallbacks,
         }
     }
@@ -260,8 +254,8 @@ impl FontSystem {
     }
 
     /// Consume this [`FontSystem`] and return the locale, font database and font fallback lists.
-    pub fn into_locale_and_db_and_fallback(self) -> (String, fontdb::Database, Box<dyn Fallback>) {
-        (self.locale, self.db, self.dyn_fallback)
+    pub fn into_locale_and_db_and_fallback(self) -> (String, fontdb::Database, Fallbacks) {
+        (self.locale, self.db, self.fallbacks)
     }
 
     /// Get a font by its ID.

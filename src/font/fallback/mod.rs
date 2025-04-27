@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use alloc::borrow::ToOwned;
-use alloc::string::String;
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::{mem, ops::Range};
@@ -78,35 +77,29 @@ pub trait Fallback: Send + Sync {
     fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str];
 }
 
-impl<T: Fallback + 'static> From<T> for Box<dyn Fallback> {
-    fn from(t: T) -> Self {
-        Box::new(t)
-    }
-}
-
 #[derive(Debug, Default)]
-pub(crate) struct Fallbacks {
-    lists: Vec<&'static str>,
+pub struct Fallbacks {
+    lists: Box<[&'static str]>,
     common_fallback_range_end: usize,
     forbidden_fallback_range_end: usize,
-    script_fallback_ranges: Vec<Option<Range<usize>>>,
-    locale: String,
+    script_fallback_ranges: Box<[Option<Range<usize>>]>,
 }
 
 impl Fallbacks {
-    pub(crate) fn new(fallbacks: &dyn Fallback, scripts: &[Script], locale: &str) -> Self {
+    pub(crate) fn new(fallbacks: impl Fallback, locale: &str) -> Self {
         let common_fallback = fallbacks.common_fallback();
 
         let forbidden_fallback = fallbacks.forbidden_fallback();
 
-        let mut lists =
-            Vec::with_capacity(common_fallback.len() + forbidden_fallback.len() + scripts.len());
+        let mut lists = Vec::with_capacity(common_fallback.len() + forbidden_fallback.len());
 
         lists.extend_from_slice(common_fallback);
         let common_fallback_range_end = lists.len();
 
         lists.extend_from_slice(forbidden_fallback);
         let forbidden_fallback_range_end = lists.len();
+
+        debug_assert!(common_fallback_range_end <= forbidden_fallback_range_end);
 
         let mut index = forbidden_fallback_range_end;
         let mut new_range = |lists: &Vec<&str>| {
@@ -117,55 +110,52 @@ impl Fallbacks {
 
         // unicode_script::Script is repr(u8) and has a maximum of 256 variants
         let mut script_fallback_ranges = vec![None; 256];
-        for &script in scripts {
+        for i in 0..=255 {
+            let script = script_from_integer(i);
             let script_fallback = fallbacks.script_fallback(script, locale);
             lists.extend_from_slice(script_fallback);
             let script_fallback_range = new_range(&lists);
             script_fallback_ranges[script as usize] = Some(script_fallback_range);
         }
 
-        let locale = locale.to_owned();
         Self {
-            lists,
+            lists: lists.into_boxed_slice(),
             common_fallback_range_end,
             forbidden_fallback_range_end,
-            script_fallback_ranges,
-            locale,
+            script_fallback_ranges: script_fallback_ranges.into_boxed_slice(),
         }
     }
 
-    pub(crate) fn extend(&mut self, fallbacks: &dyn Fallback, scripts: &[Script]) {
-        self.lists.reserve(scripts.len());
-
-        let mut index = self.lists.len();
-        let mut new_range = |lists: &Vec<&str>| {
-            let old_index = index;
-            index = lists.len();
-            old_index..index
-        };
-
-        for &script in scripts {
-            let script_fallback = fallbacks.script_fallback(script, &self.locale);
-            self.lists.extend_from_slice(script_fallback);
-            self.script_fallback_ranges[script as usize] = Some(new_range(&self.lists));
-        }
-    }
-
+    #[inline]
     pub(crate) fn common_fallback(&self) -> &[&'static str] {
-        debug_assert!(self.common_fallback_range_end <= self.forbidden_fallback_range_end);
         &self.lists[0..self.common_fallback_range_end]
     }
 
+    #[inline]
     pub(crate) fn forbidden_fallback(&self) -> &[&'static str] {
-        debug_assert!(self.common_fallback_range_end <= self.forbidden_fallback_range_end);
         &self.lists[self.common_fallback_range_end..self.forbidden_fallback_range_end]
     }
 
+    #[inline]
     pub(crate) fn script_fallback(&self, script: Script) -> &[&'static str] {
         self.script_fallback_ranges
             .get(script as usize)
             .and_then(|x| x.as_ref())
             .map_or(&[], |range| &self.lists[range.clone()])
+    }
+}
+
+impl Fallback for Fallbacks {
+    fn common_fallback(&self) -> &[&'static str] {
+        self.common_fallback()
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        self.forbidden_fallback()
+    }
+
+    fn script_fallback(&self, script: Script, _locale: &str) -> &[&'static str] {
+        self.script_fallback(script)
     }
 }
 
@@ -208,9 +198,6 @@ impl<'a> FontFallbackIter<'a> {
         scripts: &'a [Script],
         word: &'a str,
     ) -> Self {
-        font_system
-            .fallbacks
-            .extend(font_system.dyn_fallback.as_ref(), scripts);
         font_system.monospace_fallbacks_buffer.clear();
         Self {
             font_system,
@@ -474,5 +461,203 @@ impl Iterator for FontFallbackIter<'_> {
         let item = self.next_item(&fallbacks);
         mem::swap(&mut fallbacks, &mut self.font_system.fallbacks);
         item
+    }
+}
+
+/// Adapted from definition of [`unicode_script::Script`]
+#[inline]
+fn script_from_integer(value: u8) -> Script {
+    match value {
+        0xFF => Script::Unknown,
+        0xFE => Script::Common,
+        0xFD => Script::Inherited,
+        0 => Script::Adlam,
+        1 => Script::Caucasian_Albanian,
+        2 => Script::Ahom,
+        3 => Script::Arabic,
+        4 => Script::Imperial_Aramaic,
+        5 => Script::Armenian,
+        6 => Script::Avestan,
+        7 => Script::Balinese,
+        8 => Script::Bamum,
+        9 => Script::Bassa_Vah,
+        10 => Script::Batak,
+        11 => Script::Bengali,
+        12 => Script::Bhaiksuki,
+        13 => Script::Bopomofo,
+        14 => Script::Brahmi,
+        15 => Script::Braille,
+        16 => Script::Buginese,
+        17 => Script::Buhid,
+        18 => Script::Chakma,
+        19 => Script::Canadian_Aboriginal,
+        20 => Script::Carian,
+        21 => Script::Cham,
+        22 => Script::Cherokee,
+        23 => Script::Chorasmian,
+        24 => Script::Coptic,
+        25 => Script::Cypro_Minoan,
+        26 => Script::Cypriot,
+        27 => Script::Cyrillic,
+        28 => Script::Devanagari,
+        29 => Script::Dives_Akuru,
+        30 => Script::Dogra,
+        31 => Script::Deseret,
+        32 => Script::Duployan,
+        33 => Script::Egyptian_Hieroglyphs,
+        34 => Script::Elbasan,
+        35 => Script::Elymaic,
+        36 => Script::Ethiopic,
+        37 => Script::Garay,
+        38 => Script::Georgian,
+        39 => Script::Glagolitic,
+        40 => Script::Gunjala_Gondi,
+        41 => Script::Masaram_Gondi,
+        42 => Script::Gothic,
+        43 => Script::Grantha,
+        44 => Script::Greek,
+        45 => Script::Gujarati,
+        46 => Script::Gurung_Khema,
+        47 => Script::Gurmukhi,
+        48 => Script::Hangul,
+        49 => Script::Han,
+        50 => Script::Hanunoo,
+        51 => Script::Hatran,
+        52 => Script::Hebrew,
+        53 => Script::Hiragana,
+        54 => Script::Anatolian_Hieroglyphs,
+        55 => Script::Pahawh_Hmong,
+        56 => Script::Nyiakeng_Puachue_Hmong,
+        57 => Script::Old_Hungarian,
+        58 => Script::Old_Italic,
+        59 => Script::Javanese,
+        60 => Script::Kayah_Li,
+        61 => Script::Katakana,
+        62 => Script::Kawi,
+        63 => Script::Kharoshthi,
+        64 => Script::Khmer,
+        65 => Script::Khojki,
+        66 => Script::Khitan_Small_Script,
+        67 => Script::Kannada,
+        68 => Script::Kirat_Rai,
+        69 => Script::Kaithi,
+        70 => Script::Tai_Tham,
+        71 => Script::Lao,
+        72 => Script::Latin,
+        73 => Script::Lepcha,
+        74 => Script::Limbu,
+        75 => Script::Linear_A,
+        76 => Script::Linear_B,
+        77 => Script::Lisu,
+        78 => Script::Lycian,
+        79 => Script::Lydian,
+        80 => Script::Mahajani,
+        81 => Script::Makasar,
+        82 => Script::Mandaic,
+        83 => Script::Manichaean,
+        84 => Script::Marchen,
+        85 => Script::Medefaidrin,
+        86 => Script::Mende_Kikakui,
+        87 => Script::Meroitic_Cursive,
+        88 => Script::Meroitic_Hieroglyphs,
+        89 => Script::Malayalam,
+        90 => Script::Modi,
+        91 => Script::Mongolian,
+        92 => Script::Mro,
+        93 => Script::Meetei_Mayek,
+        94 => Script::Multani,
+        95 => Script::Myanmar,
+        96 => Script::Nag_Mundari,
+        97 => Script::Nandinagari,
+        98 => Script::Old_North_Arabian,
+        99 => Script::Nabataean,
+        100 => Script::Newa,
+        101 => Script::Nko,
+        102 => Script::Nushu,
+        103 => Script::Ogham,
+        104 => Script::Ol_Chiki,
+        105 => Script::Ol_Onal,
+        106 => Script::Old_Turkic,
+        107 => Script::Oriya,
+        108 => Script::Osage,
+        109 => Script::Osmanya,
+        110 => Script::Old_Uyghur,
+        111 => Script::Palmyrene,
+        112 => Script::Pau_Cin_Hau,
+        113 => Script::Old_Permic,
+        114 => Script::Phags_Pa,
+        115 => Script::Inscriptional_Pahlavi,
+        116 => Script::Psalter_Pahlavi,
+        117 => Script::Phoenician,
+        118 => Script::Miao,
+        119 => Script::Inscriptional_Parthian,
+        120 => Script::Rejang,
+        121 => Script::Hanifi_Rohingya,
+        122 => Script::Runic,
+        123 => Script::Samaritan,
+        124 => Script::Old_South_Arabian,
+        125 => Script::Saurashtra,
+        126 => Script::SignWriting,
+        127 => Script::Shavian,
+        128 => Script::Sharada,
+        129 => Script::Siddham,
+        130 => Script::Khudawadi,
+        131 => Script::Sinhala,
+        132 => Script::Sogdian,
+        133 => Script::Old_Sogdian,
+        134 => Script::Sora_Sompeng,
+        135 => Script::Soyombo,
+        136 => Script::Sundanese,
+        137 => Script::Sunuwar,
+        138 => Script::Syloti_Nagri,
+        139 => Script::Syriac,
+        140 => Script::Tagbanwa,
+        141 => Script::Takri,
+        142 => Script::Tai_Le,
+        143 => Script::New_Tai_Lue,
+        144 => Script::Tamil,
+        145 => Script::Tangut,
+        146 => Script::Tai_Viet,
+        147 => Script::Telugu,
+        148 => Script::Tifinagh,
+        149 => Script::Tagalog,
+        150 => Script::Thaana,
+        151 => Script::Thai,
+        152 => Script::Tibetan,
+        153 => Script::Tirhuta,
+        154 => Script::Tangsa,
+        155 => Script::Todhri,
+        156 => Script::Toto,
+        157 => Script::Tulu_Tigalari,
+        158 => Script::Ugaritic,
+        159 => Script::Vai,
+        160 => Script::Vithkuqi,
+        161 => Script::Warang_Citi,
+        162 => Script::Wancho,
+        163 => Script::Old_Persian,
+        164 => Script::Cuneiform,
+        165 => Script::Yezidi,
+        166 => Script::Yi,
+        167 => Script::Zanabazar_Square,
+        _ => Script::Unknown,
+    }
+}
+
+#[test]
+fn round_trip_script_integer_conversions() {
+    for i in 0..168 {
+        let script = script_from_integer(i);
+        assert!(script as u8 == i, "known scripts");
+    }
+    for i in 168..0xFD {
+        let script = script_from_integer(i);
+        assert!(
+            script == Script::Unknown && script as u8 == 0xFF,
+            "unallocated integers for scripts"
+        );
+    }
+    for i in 0xFD..=0xFF {
+        let script = script_from_integer(i);
+        assert!(script as u8 == i, "special values");
     }
 }
